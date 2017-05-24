@@ -1,16 +1,17 @@
-Commands entered in the following format: 
+для правильного запуску необхідно додати параметр віртуальної машини java
 
-example : 
+-Djava.security.policy=java.policy
+
+як в клієнті так і на сервері
+
+команди мають наступну сигнатуру:
 
 ping
-echo anyText
-login login password 
-list
-msg destination messegText 
-file destination fileName (file must be in home directory, fileName example "1.txt", received fileName "sourceLogin_fileName")
-exit
+echo any text
+search value
 
-If you can not send a file, you can try to receive a file from another client and send it back with the appropriate name.
+в еchо any text - будь-який текст який надішлеться серверу та отримається назад
+в команді пошуку value - шукане значення
 
-
-Command "exit" closes the program.
+про алгоритм
+https://prog-cpp.ru/search-serial/
