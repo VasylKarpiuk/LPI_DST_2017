@@ -1,10 +1,12 @@
-
-package lpi_dst_2017_karpiuk.bug_project;
+package sem3;
 
 public class Main {
 
 	public static void main(String[] args) {
-		System.out.println("Hello World!");
+		
+		Client client = new Client();
+        client.start(4321);
+
 	}
 
 }
