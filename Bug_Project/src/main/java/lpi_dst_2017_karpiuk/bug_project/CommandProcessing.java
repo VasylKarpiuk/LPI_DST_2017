@@ -1,344 +1,268 @@
-package seminar5;
+package seminar6;
 
 import java.io.*;
+import javax.jms.*;
 import java.nio.file.Files;
-import java.util.*;
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
-import org.glassfish.jersey.client.authentication.HttpAuthenticationFeature;
+import java.time.Instant;
+import java.util.List;
+import lpi.server.mq.FileInfo;
 
 public class CommandProcessing {
+
+    private static final String PING_QUEUE = "chat.diag.ping";
+    private static final String ECHO_QUEUE = "chat.diag.echo";
+    private static final String LOGIN_QUEUE = "chat.login";
+    private static final String LIST_USERS_QUEUE = "chat.listUsers";
+    private static final String SEND_MESSAGE_QUEUE = "chat.sendMessage";
+    private static final String MESSAGES_QUEUE = "chat.messages";
+    private static final String SEND_FILE_QUEUE = "chat.sendFile";
+    private static final String FILES_QUEUE = "chat.files";
+    private static final String EXIT_QUEUE = "chat.exit";
 
     private final int ECHO_VALID_PARAMETERS_LENGTH = 2;
     private final int LOGIN_VALID_PARAMETERS_LENGTH = 3;
     private final int MESSAGE_VALID_PARAMETERS_LENGTH = 3;
     private final int FILE_VALID_PARAMETERS_LENGTH = 3;
 
-    private final javax.ws.rs.client.Client client;
+    private final Session session, sessionReceiveMess, sessionReceiveFile;
+    private MessageReceiver mesReceive;
+    private FileReceiver fileReceive;
 
-    public CommandProcessing(javax.ws.rs.client.Client client) {
-        this.client = client;
+    public CommandProcessing(List<Session> sessions) {
+        this.session = sessions.get(0);
+        this.sessionReceiveMess = sessions.get(1);
+        this.sessionReceiveFile = sessions.get(2);
     }
 
-    private final ParsResp pR = new ParsResp();
-
-    private final String uri = "http://localhost:8080/chat/server/";
-
-    private int receiveCod;
-    private boolean enteredComand;
-
-    private final Timer timer = new Timer();
-
-    private final UserInfo userInfo = new UserInfo();
-    private static Entity userInfoEntity;
-    private boolean logg = true;
-
-    private final FileInfo fileInfo = new FileInfo();
-    private Entity fileInfoEntity;
+    private boolean islogged = false;
+    private String myLogin;
+    public static Instant timestamp;
 
     public void ping() {
         try {
-            System.out.println(client.target(uri + "ping")
-                    .request(MediaType.TEXT_PLAIN_TYPE)
-                    .get(String.class));
-        } catch (Exception ex) {
+            Message msg = session.createMessage();
+            Message ms = contactServer(msg, PING_QUEUE);
+
+            responsAnalize(ms instanceof Message, "Ping succesfull",
+                    "Unexpected message type: " + msg.getClass());
+
+        } catch (JMSException ex) {
             System.out.println("connections problem");
         }
     }
 
     public void echo(String[] comandMas) {
+        if (!isValidNumberOfParameter(comandMas.length, ECHO_VALID_PARAMETERS_LENGTH)) {
+            return;
+        }
+        try {
+            String echoText = comandMas[1];
 
-        if (isValidNumberOfParameter(comandMas.length, ECHO_VALID_PARAMETERS_LENGTH)) {
+            TextMessage msg = session.createTextMessage(echoText);
+            Message ms = contactServer(msg, ECHO_QUEUE);
+
+            responsAnalize(ms instanceof TextMessage, ((TextMessage) ms).getText(),
+                    "Unexpected message type: " + msg.getClass());
+
+        } catch (JMSException ex) {
+            System.out.println("connections problem");
+        }
+    }
+
+    public void login(String[] comandMas) {
+        if (isValidNumberOfParameter(comandMas.length, LOGIN_VALID_PARAMETERS_LENGTH)) {
+            String login = comandMas[1];
+            String password = comandMas[2];
+
             try {
-                System.out.println(client.target(uri + "echo")
-                        .request(MediaType.TEXT_PLAIN_TYPE)
-                        .post(Entity.text(comandMas[1]), String.class));
+                MapMessage request = session.createMapMessage();
+                request.setString("login", login);
+                request.setString("password", password);
+                MapMessage response = (MapMessage) contactServer(request, LOGIN_QUEUE);
 
-            } catch (Exception ex) {
+                if (responsAnalize(response.getBoolean("success"), "logged in",
+                        "Failed to login: " + response.getString("message"))) {
+                    setLogin(login);
+                    createFileAndMessageReceivers();
+                }
+            } catch (JMSException ex) {
                 System.out.println("connections problem");
             }
         }
     }
 
-    public void login(String[] comandMas) {
-        if (!logg) {
-            System.out.println("You are logged");
-            return;
-        }
+    private void setLogin(String login) {
+        islogged = true;
+        myLogin = login;
+    }
 
-        if (!isValidNumberOfParameter(comandMas.length, LOGIN_VALID_PARAMETERS_LENGTH)) {
-            userInfo.login = comandMas[1];
-            userInfo.password = comandMas[2];
-            userInfoEntity = Entity.entity(userInfo, MediaType.APPLICATION_JSON_TYPE);
+    private void createFileAndMessageReceivers() throws JMSException {
+        mesReceive = new MessageReceiver(sessionReceiveMess);
+        mesReceive.receive(MESSAGES_QUEUE);
 
-            receiveCod = client.target(uri + "user")
-                    .request(MediaType.TEXT_PLAIN_TYPE)
-                    .put(userInfoEntity)
-                    .getStatus();
-
-            if (receiveCod == 201 || receiveCod == 202) {
-                if (receiveCod == 201) {
-                    System.out.println("New user registered");
-                }
-                if (receiveCod == 202) {
-                    System.out.println("the provided login/password are correct");
-                }
-                this.client.register(HttpAuthenticationFeature.basic(userInfo.login, userInfo.password));
-
-                if (logg) {
-                    logg = false;
-                    timer.schedule(receive, 0, 1500);
-                }
-            } else {
-                getRespCod(receiveCod);
-            }
-        }
+        fileReceive = new FileReceiver(sessionReceiveFile);
+        fileReceive.receive(FILES_QUEUE);
     }
 
     public void list() {
-        receiveCod = client.target(uri + "users")
-                .request(MediaType.APPLICATION_JSON_TYPE)
-                .get(Response.class)
-                .getStatus();
+        if (isLogged()) {
+            try {
+                Message request = session.createMapMessage();
+                ObjectMessage response = (ObjectMessage) contactServer(request, LIST_USERS_QUEUE);
 
-        if (receiveCod == 200) {
-            List<String> users = pR.pars(client.target(uri + "users")
-                    .request(MediaType.APPLICATION_JSON_TYPE)
-                    .get(String.class));
-
-            System.out.println("Active users:\n");
-
-            users.stream().forEach((us) -> {
-                System.out.println(us);
-            });
-
-            System.out.println();
-        } else {
-            getRespCod(receiveCod);
+                Serializable obj = ((ObjectMessage) response).getObject();
+                if (obj != null && obj instanceof String[]) {
+                    String[] users = (String[]) obj;
+                    System.out.println("\nOnline users :");
+                    for (String user : users) {
+                        System.out.println(user);
+                    }
+                } else {
+                    throw new IOException("Unexpected content: " + obj);
+                }
+            } catch (JMSException | IOException ex) {
+                System.out.println("connections problem");
+            }
         }
     }
 
     public void msg(String[] comandMas) {
+        if (!isLogged()) {
+            return;
+        }
+        if (isValidNumberOfParameter(comandMas.length, MESSAGE_VALID_PARAMETERS_LENGTH)) {
+            return;
+        }
+        String receiver = comandMas[1];
+        String message = comandMas[2];
+        try {
+            MapMessage request = session.createMapMessage();
+            request.setString("receiver", receiver);
+            request.setString("message", message);
+            MapMessage response = (MapMessage) contactServer(request, SEND_MESSAGE_QUEUE);
 
-        if (!isValidNumberOfParameter(comandMas.length, MESSAGE_VALID_PARAMETERS_LENGTH)) {
-            receiveCod = client.target(uri + comandMas[1] + "/messages")
-                    .request(MediaType.APPLICATION_JSON_TYPE)
-                    .post(Entity.text(comandMas[2]))
-                    .getStatus();
+            responsAnalize(response.getBoolean("success"), "Message send",
+                    "Failed sending message: " + response.getString("message"));
 
-            getRespCod(receiveCod);
+        } catch (JMSException ex) {
+            ex.printStackTrace();
+            System.out.println("connections problem");
         }
     }
 
-    public void file(String[] comandMas) throws IOException {
-        if (!isValidNumberOfParameter(comandMas.length, FILE_VALID_PARAMETERS_LENGTH)) {
-            File file = new File(comandMas[2]);
-            if (!file.exists()) {
-                System.out.println("No this file");
-                return;
-            }
-
-            java.util.Base64.Encoder encoder = java.util.Base64.getEncoder();
-            fileInfo.sender = userInfo.login;
-            fileInfo.filename = comandMas[2];
-            fileInfo.content = encoder.encodeToString(Files.readAllBytes(file.toPath()));
-            fileInfoEntity = Entity.entity(fileInfo, MediaType.APPLICATION_JSON_TYPE);
-
-            receiveCod = client.target(uri + comandMas[1] + "/files")
-                    .request(MediaType.APPLICATION_JSON_TYPE)
-                    .post(fileInfoEntity)
-                    .getStatus();
-
-            getRespCod(receiveCod);
+    public void file(String[] comandMas) {
+        if (!isLogged()) {
+            return;
         }
-    }
-
-    private boolean isValidNumberOfParameter(int ComandMasLength, int validLength) {        
-        return (ComandMasLength != validLength) ? true : badParameterLength();
-    }
-    
-    private boolean badParameterLength(){
-        System.out.println("Bad argument");
-        return false;
-    }
-
-    public void receiveMsg() {
-        receiveCod = client.target(uri + userInfo.login + "/messages")
-                .request(MediaType.APPLICATION_JSON_TYPE)
-                .get(Response.class)
-                .getStatus();
-
-        if (receiveCod == 200) {
-
-            List<String> messId = pR.pars(client.target(uri + userInfo.login + "/messages/")
-                    .request(MediaType.APPLICATION_JSON_TYPE)
-                    .get(String.class));
-
-            for (String id : messId) {
-                List<String> mess = pR.pars(client.target(uri + userInfo.login + "/messages/" + id)
-                        .request(MediaType.APPLICATION_JSON_TYPE)
-                        .get(String.class));
-
-                System.out.println("\nMessage from : " + mess.get(3) + "\nMessage text : " + mess.get(1) + "\n");
-                getRespCod(client.target(uri + userInfo.login + "/messages/" + id)
-                        .request(MediaType.APPLICATION_JSON_TYPE)
-                        .delete(Response.class)
-                        .getStatus());
-            }
-        } else {
-            getRespCod(receiveCod);
+        if (isValidNumberOfParameter(comandMas.length, FILE_VALID_PARAMETERS_LENGTH)) {
+            return;
         }
-    }
+        String receiver = comandMas[1];
+        String fileName = comandMas[2];
+        File file = new File(fileName);
+        if (!file.exists()) {
+            System.out.println("No this file");
+            return;
+        }
+        try {
+            ObjectMessage request = session.createObjectMessage(new FileInfo(myLogin, receiver,
+                    fileName, Files.readAllBytes(file.toPath())));
 
-    public void receiveFile() {
-        receiveCod = client.target(uri + userInfo.login + "/files")
-                .request(MediaType.APPLICATION_JSON_TYPE).get(Response.class)
-                .getStatus();
+            MapMessage response = (MapMessage) contactServer(request, SEND_FILE_QUEUE);
 
-        if (receiveCod == 200) {
-
-            List<String> fileId = pR.pars(client.target(uri + userInfo.login + "/files/")
-                    .request(MediaType.APPLICATION_JSON_TYPE)
-                    .get(String.class));
-
-            for (String id : fileId) {
-                FileInfo fI = client.target(uri + userInfo.login + "/files/" + id)
-                        .request(MediaType.APPLICATION_JSON_TYPE)
-                        .get(FileInfo.class);
-
-                java.util.Base64.Decoder decoder = java.util.Base64.getDecoder();
-                byte[] decodedContent = decoder.decode(fI.content);
-
-                if (decodedContent != null) {
-                    System.out.println("\nFile from " + fI.sender
-                            + "\nFile name : \"" + fI.filename + "\"\n");
-
-                    try (FileOutputStream fos = new FileOutputStream(
-                            new File(fI.sender + "_" + fI.filename))) {
-                        fos.write(decodedContent);
-                    } catch (Exception ex) {
-                        System.out.println("Problem with write file");
-                    }
-                } else if (enteredComand) {
-                    System.out.println("No file");
-                }
-// delete file from server
-                getRespCod(client.target(uri + userInfo.login + "/files/" + id)
-                        .request(MediaType.APPLICATION_JSON_TYPE)
-                        .delete(Response.class)
-                        .getStatus());
-            }
-        } else {
-            getRespCod(receiveCod);
+            responsAnalize(response.getBoolean("success"), "File send",
+                    "Failed sending file: " + response.getString("message"));
+        } catch (JMSException | IOException ex) {
+            System.out.println("file sending problem");
         }
     }
 
     public void exit() {
-        Client.flug = false;
-        timer.cancel();
-        if (client != null) {
-            client.close();
-        }
-        System.out.println("Exit from server");
-    }
+        try {
+            if (islogged) {
+                mesReceive.exit();
+                fileReceive.exit();
+            }
 
-    private void getRespCod(int cod) {
-        switch (cod) {
+            Message msg = session.createMessage();
+            Message ms = contactServer(msg, EXIT_QUEUE);
 
-            case 200:
-                System.out.println("deleted successfully");
-                break;
-
-            case 201:
-                System.out.println("sending is processed");
-                break;
-
-            case 204:
-                if (enteredComand) {
-                    System.out.println("There are nothing for this  user");
-                }
-                break;
-
-            case 400:
-                System.out.println("incorrect data request");
-                break;
-
-            case 401:
-                System.out.println("authentication is not correct");
-                break;
-
-            case 403:
-                System.out.println("you are not allowed to access this resource");
-                break;
-
-            case 404:
-                System.out.println("the specified message was not found");
-                break;
-
-            case 406:
-                System.out.println("target user has too much pending files");
-                break;
-
-            case 500:
-                System.out.println("internal server error");
-                break;
+            if (responsAnalize(ms instanceof Message, "Exit gracefull",
+                    "Unexpected message type: " + msg.getClass())) {
+                Client.flug = false;
+            }
+        } catch (JMSException ex) {
+            System.out.println("connections problem");
         }
     }
 
-    TimerTask receive = new TimerTask() {
+    private boolean responsAnalize(boolean instance, String yesMsg, String noMsg) {
+        return instance ? isInstance(yesMsg) : noInstance(noMsg);
+    }
 
-        @Override
-        public void run() {
+    private boolean isInstance(String yesMsg) {
+        System.out.println(yesMsg);
+        return true;
+    }
 
-            enteredComand = false;
-            receiveMsg();
-            receiveFile();
-            activeUser();
-            enteredComand = true;
+    private boolean noInstance(String noMsg) {
+        System.out.println("Unexpected message type: " + noMsg.getClass());
+        return false;
+    }
+
+    private boolean isLogged() {
+        return islogged ? true : falseLogin();
+    }
+
+    private boolean falseLogin() {
+        System.out.println("Login first");
+        return false;
+    }
+
+    private boolean isValidNumberOfParameter(int ComandMasLength, int validLength) {
+        return ComandMasLength == validLength ? true : falseNumberOfParameter();
+    }
+
+    private boolean falseNumberOfParameter() {
+        System.out.println("Bad argument");
+        return false;
+    }
+
+    private Message contactServer(Message request, String broker_URI) {
+        MessageProducer producer = null;
+        MessageConsumer consumer = null;
+        Message mess = null;
+        timestamp = Instant.now();
+
+        try {
+            Destination targetQueue = session.createQueue(broker_URI);
+            Destination replyQueue = session.createTemporaryQueue();
+
+            producer = session.createProducer(targetQueue);
+            consumer = session.createConsumer(replyQueue);
+
+            request.setJMSReplyTo(replyQueue);
+            producer.send(request);
+            mess = consumer.receive(1500);
+
+        } catch (JMSException ex) {
+            ex.printStackTrace();
+        } finally {
+            close_Prod_Cons(producer, consumer);
         }
-    };
-    private final List<String> user = new LinkedList<>();
+        return mess;
+    }
 
-    private void activeUser() {
-        if (client.target(uri + "user")
-                .request(MediaType.TEXT_PLAIN_TYPE)
-                .put(userInfoEntity)
-                .getStatus() == 202) {
-
-            List<String> activeUser = new LinkedList<>();
-            List<String> logedOut = new LinkedList<>();
-            List<String> list = null;
-
-            if (client.target(uri + "users")
-                    .request(MediaType.APPLICATION_JSON_TYPE)
-                    .get(Response.class)
-                    .getStatus() == 200) {
-
-                list = pR.pars(client.target(uri + "users")
-                        .request(MediaType.APPLICATION_JSON_TYPE)
-                        .get(String.class));
+    private void close_Prod_Cons(MessageProducer producer, MessageConsumer consumer) {
+        try {
+            if (producer != null) {
+                producer.close();
             }
-
-            for (String f : list) {
-                activeUser.add(f);
-
-                if (!user.contains(f)) {
-                    user.add(f);
-                    System.out.println("\t" + f + " logged in");
-                }
+            if (consumer != null) {
+                consumer.close();
             }
-
-            for (String us : user) {
-                if (!activeUser.contains(us)) {
-                    System.out.println("\t" + us + " logged out");
-                    logedOut.add(us);
-                }
-            }
-
-            logedOut.stream().forEach((out) -> {
-                user.remove(out);
-            });
+        } catch (Exception ex) {
+            System.out.println("Closing producer/consumer problem");
         }
     }
 }
