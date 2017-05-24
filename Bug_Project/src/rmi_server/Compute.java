@@ -33,7 +33,6 @@ public interface Compute extends Remote {
         @Override
         public int[] execute() throws IOException {
             String[] stringMass = new String(clientMass, StandardCharsets.UTF_8).trim().split(" ");
-
             int[] intMass = new int[stringMass.length];
             for(int i = 0; i < intMass.length; i++){
                 intMass[i] = Integer.parseInt(stringMass[i]);
@@ -50,26 +49,26 @@ public interface Compute extends Remote {
         private int[] search(int[] clientMass){
 
             ArrayList<Integer> list = new ArrayList<>();
-            int temp;          // вспомогательная переменная для обмена
-            for (int i = 0; i < clientMass.length; i++) // просматриваем все элементы в цикле
+            int temp;          // допоміжна змінна для обміну
+            for (int i = 0; i < clientMass.length; i++) // перебираємо всі елементи в циклі
             {
-                if (clientMass[i] == key) // если находим элемент со значением key,
+                if (clientMass[i] == key)
                 {
-                    if (i == 0) // если индекс равен нулю, возвращаем его,
+                    if (i == 0) // якщо індекс = 0, записуємо його і продовжуємо далі
                     {
                         list.add(i);
-                        continue;// потому что смещаться ближе к началу массива невозможно
+                        continue;
                     }
-                    temp = clientMass[i];      // меняем местами найденный элемент с предыдущим
+                    temp = clientMass[i];      // міняємо місцями знайдений елемент з попереднім
                     clientMass[i] = clientMass[i - 1];
                     clientMass[i - 1] = temp;
-                    list.add(i);         // возвращаем найденный индекс элемента
+                    list.add(i);         // записуємо знайдений індекс
                 }
             }
-            if (list.isEmpty()) {
+            if (list.isEmpty()) {   // якщо елемент не знайдено, записуємо -1
                 list.add(-1);
             }
-            return getIntMass(list);  // если элемент не найден, возвращаем -1
+            return getIntMass(list);
         }
 
         private int[] getIntMass(ArrayList<Integer> list){
